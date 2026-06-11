@@ -19,6 +19,12 @@ class BibleRepository {
   Future<Chapter?> getChapter(int id) => _bible.getChapter(id);
   Future<Book?> getBook(int id) => _bible.getBook(id);
 
+  Future<Chapter?> findChapter(int bookId, int number) =>
+      _bible.findChapter(bookId, number);
+
+  Future<Verse?> findVerse(int chapterId, int number) =>
+      _bible.findVerse(chapterId, number);
+
   Future<List<Verse>> searchText(String query) => _bible.searchText(query);
 
   Stream<List<BookmarkWithVerse>> watchBookmarks() =>

@@ -4,8 +4,14 @@ import '../../data/db/database.dart';
 import '../../data/repository/bible_repository.dart';
 import '../../data/repository/providers.dart';
 import '../../services/embedding_service.dart';
+import '../../services/prefs_service.dart';
+import 'bible_ref_parser.dart';
 
 enum SearchMode { text, semantic }
+
+enum TestamentFilter { all, at, nt }
+
+// ── Result types ──────────────────────────────────────────────────────────────
 
 class SearchResult {
   const SearchResult({
@@ -20,14 +26,34 @@ class SearchResult {
   final double? score;
 }
 
+class RefResult {
+  const RefResult({required this.book, required this.chapter, this.verse});
+  final Book book;
+  final Chapter chapter;
+  final Verse? verse;
+
+  String get label {
+    final ch = chapter.number;
+    return verse != null
+        ? '${book.name} $ch:${verse!.number}'
+        : '${book.name} $ch';
+  }
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
 class SearchState {
   const SearchState({
-    this.mode = SearchMode.text,
+    this.mode = SearchMode.semantic,
     this.query = '',
     this.results = const [],
     this.isLoading = false,
     this.error,
     this.embeddingServiceReady = false,
+    this.embeddingLoadError,
+    this.refResult,
+    this.searchHistory = const [],
+    this.testamentFilter = TestamentFilter.all,
   });
 
   final SearchMode mode;
@@ -36,6 +62,10 @@ class SearchState {
   final bool isLoading;
   final String? error;
   final bool embeddingServiceReady;
+  final String? embeddingLoadError;
+  final RefResult? refResult;
+  final List<String> searchHistory;
+  final TestamentFilter testamentFilter;
 
   SearchState copyWith({
     SearchMode? mode,
@@ -44,6 +74,11 @@ class SearchState {
     bool? isLoading,
     String? error,
     bool? embeddingServiceReady,
+    String? embeddingLoadError,
+    RefResult? refResult,
+    bool clearRefResult = false,
+    List<String>? searchHistory,
+    TestamentFilter? testamentFilter,
   }) =>
       SearchState(
         mode: mode ?? this.mode,
@@ -53,8 +88,14 @@ class SearchState {
         error: error,
         embeddingServiceReady:
             embeddingServiceReady ?? this.embeddingServiceReady,
+        embeddingLoadError: embeddingLoadError ?? this.embeddingLoadError,
+        refResult: clearRefResult ? null : (refResult ?? this.refResult),
+        searchHistory: searchHistory ?? this.searchHistory,
+        testamentFilter: testamentFilter ?? this.testamentFilter,
       );
 }
+
+// ── Notifier ──────────────────────────────────────────────────────────────────
 
 class SearchNotifier extends AutoDisposeNotifier<SearchState> {
   late BibleRepository _repo;
@@ -64,58 +105,140 @@ class SearchNotifier extends AutoDisposeNotifier<SearchState> {
   SearchState build() {
     _repo = ref.watch(bibleRepositoryProvider);
     _initEmbeddings();
-    return const SearchState();
+    final history = _loadHistorySync();
+    return SearchState(searchHistory: history);
+  }
+
+  List<String> _loadHistorySync() {
+    try {
+      return PrefsService.instance.getSearchHistory();
+    } catch (_) {
+      return const [];
+    }
   }
 
   void _initEmbeddings() async {
     try {
       _embeddings = await EmbeddingService.load();
       state = state.copyWith(embeddingServiceReady: true);
-    } catch (e) {
-      // Semantic search unavailable if model not found
+    } catch (e, st) {
+      state = state.copyWith(embeddingLoadError: '$e\n$st');
     }
   }
 
-  void setMode(SearchMode mode) {
-    state = state.copyWith(mode: mode, results: [], query: '');
+  void setTestamentFilter(TestamentFilter filter) {
+    state = state.copyWith(testamentFilter: filter);
+  }
+
+  Future<void> clearHistory() async {
+    try {
+      await PrefsService.instance.clearSearchHistory();
+      state = state.copyWith(searchHistory: []);
+    } catch (_) {}
+  }
+
+  // Chamado quando o usuário navega para um versículo — registra apenas
+  // a query que estava ativa nesse momento, não cada keystroke intermediário.
+  Future<void> recordSearch() async {
+    final q = state.query;
+    if (q.isEmpty) return;
+    try {
+      await PrefsService.instance.saveSearchQuery(q);
+      state = state.copyWith(
+        searchHistory: PrefsService.instance.getSearchHistory(),
+      );
+    } catch (_) {}
   }
 
   Future<void> search(String query) async {
     final q = query.trim();
     if (q.isEmpty) {
-      state = state.copyWith(query: '', results: [], isLoading: false);
+      state = state.copyWith(
+        query: '',
+        results: [],
+        isLoading: false,
+        clearRefResult: true,
+      );
       return;
     }
-    state = state.copyWith(query: q, isLoading: true, error: null);
+
+    state = state.copyWith(
+      query: q,
+      isLoading: true,
+      error: null,
+      clearRefResult: true,
+    );
+
     try {
-      final results = state.mode == SearchMode.text
-          ? await _textSearch(q)
-          : await _semanticSearch(q);
-      state = state.copyWith(results: results, isLoading: false);
+      final both = await Future.wait([
+        _tryParseRef(q),
+        _runSearch(q),
+      ]);
+      final ref = both[0] as RefResult?;
+      final results = both[1] as List<SearchResult>;
+
+      state = state.copyWith(
+        results: results,
+        isLoading: false,
+        refResult: ref,
+      );
     } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+      state = state.copyWith(
+        isLoading: false,
+        error: e.toString(),
+        clearRefResult: true,
+      );
     }
   }
 
+  // ── Reference resolution ─────────────────────────────────────────────────
+
+  Future<RefResult?> _tryParseRef(String query) async {
+    final parsed = BibleRefParser.parse(query);
+    if (parsed == null) return null;
+    final book = await _repo.getBook(parsed.bookId);
+    if (book == null) return null;
+    final chapter = await _repo.findChapter(parsed.bookId, parsed.chapter);
+    if (chapter == null) return null;
+    Verse? verse;
+    if (parsed.verse != null) {
+      verse = await _repo.findVerse(chapter.id, parsed.verse!);
+    }
+    return RefResult(book: book, chapter: chapter, verse: verse);
+  }
+
+  // ── Search dispatch ───────────────────────────────────────────────────────
+
+  // Uses semantic when embeddings are ready; silently falls back to text.
+  Future<List<SearchResult>> _runSearch(String query) {
+    if (_embeddings != null) return _semanticSearch(query);
+    return _textSearch(query);
+  }
+
+  // ── Text / semantic search ────────────────────────────────────────────────
+
   Future<List<SearchResult>> _textSearch(String query) async {
     final verses = await _repo.searchText(query);
-    return _enrichVerses(verses);
+    final enriched = await _enrichVerses(verses);
+    return _applyFilter(enriched);
   }
 
   Future<List<SearchResult>> _semanticSearch(String query) async {
     if (_embeddings == null) throw Exception('Busca semântica não disponível');
     final hits = await _embeddings!.search(query);
-    final ids = hits.map((h) => h.verseId).toList();
-    final verses = await _repo.getVersesByIds(ids);
-    // Preserve ranking order from semantic search
     final idOrder = {for (final h in hits) h.verseId: h.score};
+    final verses = await _repo.getVersesByIds(hits.map((h) => h.verseId).toList());
     verses.sort((a, b) =>
         (idOrder[b.id] ?? 0).compareTo(idOrder[a.id] ?? 0));
-    final results = await _enrichVerses(verses);
-    for (int i = 0; i < results.length; i++) {
-      // Re-attach scores — create new SearchResult with score
-    }
-    return results;
+    final enriched = await _enrichVerses(verses);
+    return _applyFilter(enriched)
+        .map((r) => SearchResult(
+              verse: r.verse,
+              book: r.book,
+              chapter: r.chapter,
+              score: idOrder[r.verse.id],
+            ))
+        .toList();
   }
 
   Future<List<SearchResult>> _enrichVerses(List<Verse> verses) async {
@@ -128,6 +251,12 @@ class SearchNotifier extends AutoDisposeNotifier<SearchState> {
       }
     }
     return results;
+  }
+
+  List<SearchResult> _applyFilter(List<SearchResult> results) {
+    if (state.testamentFilter == TestamentFilter.all) return results;
+    final t = state.testamentFilter == TestamentFilter.at ? 'AT' : 'NT';
+    return results.where((r) => r.book.testament == t).toList();
   }
 }
 

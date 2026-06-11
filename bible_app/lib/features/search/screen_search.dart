@@ -31,20 +31,26 @@ class _ScreenSearchState extends ConsumerState<ScreenSearch> {
     });
   }
 
+  void _fillAndSearch(String query) {
+    _controller.text = query;
+    _controller.selection =
+        TextSelection.fromPosition(TextPosition(offset: query.length));
+    ref.read(searchNotifierProvider.notifier).search(query);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(searchNotifierProvider);
     final scheme = Theme.of(context).colorScheme;
+    final queryActive = _controller.text.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
         title: TextField(
           controller: _controller,
           autofocus: true,
-          decoration: InputDecoration(
-            hintText: state.mode == SearchMode.text
-                ? 'Buscar palavras...'
-                : 'Busca semântica...',
+          decoration: const InputDecoration(
+            hintText: 'Pesquisar na Bíblia...',
             border: InputBorder.none,
             isDense: true,
           ),
@@ -61,135 +67,353 @@ class _ScreenSearchState extends ConsumerState<ScreenSearch> {
             ),
         ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: _ModeToggle(
-            mode: state.mode,
-            onModeChanged: (m) {
-              ref.read(searchNotifierProvider.notifier).setMode(m);
-              if (_controller.text.isNotEmpty) {
-                ref
-                    .read(searchNotifierProvider.notifier)
-                    .search(_controller.text);
-              }
-            },
+          preferredSize: const Size.fromHeight(28),
+          child: _SearchModeIndicator(
             semanticReady: state.embeddingServiceReady,
+            embeddingError: state.embeddingLoadError,
           ),
         ),
       ),
-      body: state.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : state.error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      state.error!,
-                      style: TextStyle(color: scheme.error),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                )
-              : state.results.isEmpty && state.query.isNotEmpty
-                  ? const Center(child: Text('Nenhum resultado encontrado'))
-                  : state.results.isEmpty
-                      ? _SearchHints(mode: state.mode)
-                      : ListView.separated(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: state.results.length,
-                          separatorBuilder: (_, __) =>
-                              const Divider(height: 1),
-                          itemBuilder: (context, i) {
-                            final r = state.results[i];
-                            return ListTile(
-                              contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 4),
-                              title: Text(
-                                '${r.book.name} ${r.chapter.number}:${r.verse.number}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: scheme.primary,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              subtitle: Text(
-                                r.verse.verseText,
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              onTap: () => context.push(
-                                '/books/${r.book.id}/chapters/${r.chapter.id}',
-                                extra: r.verse.id,
-                              ),
-                            );
-                          },
+      body: Column(
+        children: [
+          if (state.refResult != null)
+            _RefCard(
+              ref: state.refResult!,
+              onTap: () {
+                ref.read(searchNotifierProvider.notifier).recordSearch();
+                context.push(
+                  '/books/${state.refResult!.book.id}/chapters/${state.refResult!.chapter.id}',
+                  extra: state.refResult!.verse?.id,
+                );
+              },
+            ),
+          if (queryActive && state.results.isNotEmpty)
+            _TestamentFilterChips(
+              filter: state.testamentFilter,
+              onChanged: (f) =>
+                  ref.read(searchNotifierProvider.notifier).setTestamentFilter(f),
+            ),
+          Expanded(
+            child: state.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : state.error != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            state.error!,
+                            style: TextStyle(color: scheme.error),
+                            textAlign: TextAlign.center,
+                          ),
                         ),
+                      )
+                    : state.results.isEmpty && state.query.isNotEmpty
+                        ? const Center(
+                            child: Text('Nenhum resultado encontrado'))
+                        : state.results.isEmpty
+                            ? _SearchHints(
+                                history: state.searchHistory,
+                                onHistoryTap: _fillAndSearch,
+                                onClearHistory: () => ref
+                                    .read(searchNotifierProvider.notifier)
+                                    .clearHistory(),
+                              )
+                            : ListView.separated(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 8),
+                                itemCount: state.results.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (context, i) {
+                                  final r = state.results[i];
+                                  return ListTile(
+                                    contentPadding:
+                                        const EdgeInsets.symmetric(
+                                            horizontal: 16, vertical: 4),
+                                    title: Text(
+                                      '${r.book.name} ${r.chapter.number}:${r.verse.number}',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: scheme.primary,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      r.verse.verseText,
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    onTap: () {
+                                    ref
+                                        .read(searchNotifierProvider.notifier)
+                                        .recordSearch();
+                                    context.push(
+                                      '/books/${r.book.id}/chapters/${r.chapter.id}',
+                                      extra: r.verse.id,
+                                    );
+                                  },
+                                  );
+                                },
+                              ),
+          ),
+        ],
+      ),
       bottomNavigationBar: _BottomNav(selectedIndex: 1),
     );
   }
 }
 
-class _ModeToggle extends StatelessWidget {
-  const _ModeToggle({
-    required this.mode,
-    required this.onModeChanged,
-    required this.semanticReady,
-  });
+// ── Testament filter chips ─────────────────────────────────────────────────────
 
-  final SearchMode mode;
-  final ValueChanged<SearchMode> onModeChanged;
-  final bool semanticReady;
+class _TestamentFilterChips extends StatelessWidget {
+  const _TestamentFilterChips({
+    required this.filter,
+    required this.onChanged,
+  });
+  final TestamentFilter filter;
+  final ValueChanged<TestamentFilter> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: SegmentedButton<SearchMode>(
-        segments: [
-          const ButtonSegment(
-            value: SearchMode.text,
-            icon: Icon(Icons.text_fields, size: 18),
-            label: Text('Texto'),
+    return IntrinsicHeight(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _chip(context, 'Todos', TestamentFilter.all),
+            const SizedBox(width: 8),
+            _chip(context, 'Antigo Testamento', TestamentFilter.at),
+            const SizedBox(width: 8),
+            _chip(context, 'Novo Testamento', TestamentFilter.nt),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(BuildContext context, String label, TestamentFilter value) {
+    final selected = filter == value;
+    return FilterChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onChanged(value),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
+// ── Search history panel ───────────────────────────────────────────────────────
+
+class _SearchHistory extends StatelessWidget {
+  const _SearchHistory({
+    required this.history,
+    required this.onTap,
+    required this.onClear,
+  });
+  final List<String> history;
+  final ValueChanged<String> onTap;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListView(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Text(
+                'Buscas recentes',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: onClear,
+                child: const Text('Limpar'),
+              ),
+            ],
           ),
-          ButtonSegment(
-            value: SearchMode.semantic,
-            icon: const Icon(Icons.psychology, size: 18),
-            label: const Text('Semântica'),
-            enabled: semanticReady,
+        ),
+        ...history.map(
+          (q) => ListTile(
+            dense: true,
+            leading: Icon(Icons.history, size: 18, color: scheme.onSurfaceVariant),
+            title: Text(q),
+            onTap: () => onTap(q),
           ),
-        ],
-        selected: {mode},
-        onSelectionChanged: (s) => onModeChanged(s.first),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Reference navigation card ─────────────────────────────────────────────────
+
+class _RefCard extends StatelessWidget {
+  const _RefCard({required this.ref, required this.onTap});
+  final RefResult ref;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasVerse = ref.verse != null;
+
+    return Material(
+      color: scheme.primaryContainer.withValues(alpha: 0.55),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.menu_book_rounded, color: scheme.primary, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      ref.label,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onPrimaryContainer,
+                        fontSize: 14,
+                      ),
+                    ),
+                    if (hasVerse) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        ref.verse!.verseText,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: scheme.onPrimaryContainer.withValues(alpha: 0.75),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.arrow_forward_ios_rounded, size: 14, color: scheme.primary),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-class _SearchHints extends StatelessWidget {
-  const _SearchHints({required this.mode});
-  final SearchMode mode;
+// ── Search mode indicator (read-only status chip) ────────────────────────────
+
+class _SearchModeIndicator extends StatelessWidget {
+  const _SearchModeIndicator({
+    required this.semanticReady,
+    this.embeddingError,
+  });
+  final bool semanticReady;
+  final String? embeddingError;
 
   @override
   Widget build(BuildContext context) {
-    final hints = mode == SearchMode.text
-        ? ['amor', 'paz', 'oração', 'fé', 'graça']
-        : ['Jesus cura um cego', 'criação do mundo', 'ressurreição dos mortos'];
+    final scheme = Theme.of(context).colorScheme;
 
-    return Center(
+    final IconData icon;
+    final String label;
+    final Color fg;
+
+    if (semanticReady) {
+      icon = Icons.psychology_outlined;
+      label = 'Busca semântica';
+      fg = scheme.primary;
+    } else if (embeddingError != null) {
+      icon = Icons.text_fields;
+      label = 'Busca por texto (semântica indisponível)';
+      fg = scheme.error;
+    } else {
+      icon = Icons.hourglass_top_rounded;
+      label = 'Carregando busca semântica…';
+      fg = scheme.onSurfaceVariant;
+    }
+
+    return Align(
+      alignment: Alignment.centerLeft,
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: fg),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: fg,
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Search hints / empty state ─────────────────────────────────────────────────
+
+class _SearchHints extends StatelessWidget {
+  const _SearchHints({
+    required this.history,
+    required this.onHistoryTap,
+    required this.onClearHistory,
+  });
+  final List<String> history;
+  final ValueChanged<String> onHistoryTap;
+  final VoidCallback onClearHistory;
+
+  static const _hints = [
+    'Jesus e a mulher samaritana',
+    'criação do mundo',
+    'ressurreição',
+    'amor ao próximo',
+    'paz interior',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    if (history.isNotEmpty) {
+      return _SearchHistory(
+        history: history,
+        onTap: onHistoryTap,
+        onClear: onClearHistory,
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              mode == SearchMode.text ? Icons.search : Icons.psychology,
+              Icons.psychology_outlined,
               size: 56,
               color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
             ),
             const SizedBox(height: 16),
             Text(
-              mode == SearchMode.text
-                  ? 'Busque por palavras no texto'
-                  : 'Busque por conceitos e significados',
+              'Busque por conceitos e significados',
               style: Theme.of(context).textTheme.titleMedium,
               textAlign: TextAlign.center,
             ),
@@ -198,7 +422,7 @@ class _SearchHints extends StatelessWidget {
               spacing: 8,
               runSpacing: 8,
               alignment: WrapAlignment.center,
-              children: hints
+              children: _hints
                   .map(
                     (h) => ActionChip(
                       label: Text(h),
@@ -213,6 +437,8 @@ class _SearchHints extends StatelessWidget {
     );
   }
 }
+
+// ── Bottom navigation bar ─────────────────────────────────────────────────────
 
 class _BottomNav extends StatelessWidget {
   const _BottomNav({required this.selectedIndex});
@@ -230,13 +456,15 @@ class _BottomNav extends StatelessWidget {
             context.go('/search');
           case 2:
             context.go('/bookmarks');
+          case 3:
+            context.go('/highlights');
         }
       },
       destinations: const [
         NavigationDestination(icon: Icon(Icons.menu_book), label: 'Livros'),
         NavigationDestination(icon: Icon(Icons.search), label: 'Busca'),
-        NavigationDestination(
-            icon: Icon(Icons.bookmark), label: 'Favoritos'),
+        NavigationDestination(icon: Icon(Icons.bookmark), label: 'Favoritos'),
+        NavigationDestination(icon: Icon(Icons.highlight), label: 'Destaques'),
       ],
     );
   }

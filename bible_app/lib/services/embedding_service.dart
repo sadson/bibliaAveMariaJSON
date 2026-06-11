@@ -1,4 +1,3 @@
-import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
@@ -61,7 +60,7 @@ class EmbeddingService {
     final verseIds = Int32List.view(
       verseIdBytes.buffer,
       verseIdBytes.offsetInBytes,
-      verseIdBytes.lengthInBytes ~/ 4 * 4,
+      verseIdBytes.lengthInBytes ~/ 4,
     );
 
     OrtEnv.instance.init();
@@ -82,14 +81,12 @@ class EmbeddingService {
   Future<List<SemanticResult>> search(String query,
       {int topK = AppConstants.topKResults}) async {
     final queryEmbedding = await _embedQuery(query);
-    return await Isolate.run(
-      () => _cosineSimilaritySearch(
-        queryEmbedding,
-        _embeddings,
-        _verseIds,
-        topK,
-        AppConstants.embeddingDims,
-      ),
+    return _cosineSimilaritySearch(
+      queryEmbedding,
+      _embeddings,
+      _verseIds,
+      topK,
+      AppConstants.embeddingDims,
     );
   }
 
@@ -148,7 +145,7 @@ class EmbeddingService {
 
   static Float32List _l2Normalize(Float32List v) {
     double norm = 0;
-    for (final x in v) norm += x * x;
+    for (final x in v) { norm += x * x; }
     norm = math.sqrt(norm);
     if (norm == 0) return v;
     return Float32List.fromList(v.map((x) => x / norm).toList());

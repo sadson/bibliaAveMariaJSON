@@ -40,6 +40,13 @@ class Bookmarks extends Table {
   TextColumn get note => text().nullable()();
 }
 
+class Highlights extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get verseId => integer().references(Verses, #id)();
+  IntColumn get colorIndex => integer()(); // 0=yellow, 1=green, 2=blue, 3=pink
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+}
+
 // ─── DAOs ─────────────────────────────────────────────────────────────────────
 
 @DriftAccessor(tables: [Books, Chapters, Verses])
@@ -67,6 +74,16 @@ class BibleDao extends DatabaseAccessor<AppDatabase> with _$BibleDaoMixin {
 
   Future<Book?> getBook(int bookId) =>
       (select(books)..where((b) => b.id.equals(bookId))).getSingleOrNull();
+
+  Future<Chapter?> findChapter(int bookId, int number) =>
+      (select(chapters)
+            ..where((c) => c.bookId.equals(bookId) & c.number.equals(number)))
+          .getSingleOrNull();
+
+  Future<Verse?> findVerse(int chapterId, int number) =>
+      (select(verses)
+            ..where((v) => v.chapterId.equals(chapterId) & v.number.equals(number)))
+          .getSingleOrNull();
 
   // FTS5 full-text search using raw SQL
   Future<List<Verse>> searchText(String query) async {
@@ -138,17 +155,86 @@ class BookmarksDao extends DatabaseAccessor<AppDatabase>
   }
 }
 
+@DriftAccessor(tables: [Highlights, Verses])
+class HighlightsDao extends DatabaseAccessor<AppDatabase>
+    with _$HighlightsDaoMixin {
+  HighlightsDao(super.db);
+
+  Stream<List<VerseHighlight>> watchHighlights() {
+    final query = select(highlights).join([
+      innerJoin(verses, verses.id.equalsExp(highlights.verseId)),
+    ])
+      ..orderBy([OrderingTerm.desc(highlights.createdAt)]);
+
+    return query.watch().map(
+          (rows) => rows
+              .map(
+                (r) => VerseHighlight(
+                  highlight: r.readTable(highlights),
+                  verse: r.readTable(verses),
+                ),
+              )
+              .toList(),
+        );
+  }
+
+  Future<VerseHighlight?> getHighlight(int verseId) async {
+    final query = select(highlights).join([
+      innerJoin(verses, verses.id.equalsExp(highlights.verseId)),
+    ])
+      ..where(highlights.verseId.equals(verseId));
+
+    final row = await query.getSingleOrNull();
+    if (row == null) return null;
+    return VerseHighlight(
+      highlight: row.readTable(highlights),
+      verse: row.readTable(verses),
+    );
+  }
+
+  Future<void> addHighlight(int verseId, int colorIndex) =>
+      into(highlights).insert(HighlightsCompanion.insert(
+        verseId: verseId,
+        colorIndex: colorIndex,
+      ));
+
+  Future<void> updateHighlight(int verseId, int colorIndex) =>
+      (update(highlights)..where((h) => h.verseId.equals(verseId))).write(
+        HighlightsCompanion(colorIndex: Value(colorIndex)),
+      );
+
+  Future<void> removeHighlight(int verseId) =>
+      (delete(highlights)..where((h) => h.verseId.equals(verseId))).go();
+}
+
 // ─── Database ─────────────────────────────────────────────────────────────────
 
 @DriftDatabase(
-  tables: [Books, Chapters, Verses, Bookmarks],
-  daos: [BibleDao, BookmarksDao],
+  tables: [Books, Chapters, Verses, Bookmarks, Highlights],
+  daos: [BibleDao, BookmarksDao, HighlightsDao],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onUpgrade: (m, from, to) async {
+          if (from < 2) await m.createTable(highlights);
+        },
+      );
+
+  /// ARGB color values for the four highlight colors.
+  /// Index matches Highlights.colorIndex: 0=yellow, 1=green, 2=blue, 3=pink.
+  /// Use Color(highlightColorValues[index]) in the UI layer.
+  static const List<int> highlightColorValues = [
+    0xFFFFF176, // yellow
+    0xFFA5D6A7, // green
+    0xFF90CAF9, // blue
+    0xFFF48FB1, // pink
+  ];
 
   static Future<AppDatabase> create() async {
     final dbFile = await _copyDbAsset();
@@ -177,6 +263,30 @@ class BookmarkWithVerse {
 
   const BookmarkWithVerse({
     required this.bookmark,
+    required this.verse,
+    required this.book,
+    required this.chapter,
+  });
+}
+
+class VerseHighlight {
+  final Highlight highlight;
+  final Verse verse;
+
+  const VerseHighlight({
+    required this.highlight,
+    required this.verse,
+  });
+}
+
+class HighlightWithDetails {
+  final Highlight highlight;
+  final Verse verse;
+  final Book book;
+  final Chapter chapter;
+
+  const HighlightWithDetails({
+    required this.highlight,
     required this.verse,
     required this.book,
     required this.chapter,

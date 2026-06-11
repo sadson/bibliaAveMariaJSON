@@ -1,33 +1,37 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // The Flutter Gradle Plugin must be applied after the Android Gradle plugin.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
-    namespace = "br.com.grupozenir.bible_app"
+    namespace = "br.com.santosapp.bible_app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "br.com.grupozenir.bible_app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        applicationId = "br.com.santosapp.bible_app"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // Flutter 3.44+ usa targetSdkVersion=36 (Android 16), que exige alinhamento
+        // obrigatório de 16 KB em libs nativas. libonnxruntime.so e libsqlite3.so
+        // ainda não têm builds alinhadas; fixar em 35 evita o enforcement do API 36.
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    // useLegacyPackaging=true extrai as .so para o filesystem na instalação,
+    // contornando a verificação de alinhamento de página do Android 15/16.
+    // Tem precedência sobre android:extractNativeLibs no manifesto.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {

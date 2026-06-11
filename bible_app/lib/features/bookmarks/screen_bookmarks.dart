@@ -107,13 +107,15 @@ class _BottomNav extends StatelessWidget {
             context.go('/search');
           case 2:
             context.go('/bookmarks');
+          case 3:
+            context.go('/highlights');
         }
       },
       destinations: const [
         NavigationDestination(icon: Icon(Icons.menu_book), label: 'Livros'),
         NavigationDestination(icon: Icon(Icons.search), label: 'Busca'),
-        NavigationDestination(
-            icon: Icon(Icons.bookmark), label: 'Favoritos'),
+        NavigationDestination(icon: Icon(Icons.bookmark), label: 'Favoritos'),
+        NavigationDestination(icon: Icon(Icons.highlight), label: 'Destaques'),
       ],
     );
   }

@@ -51,3 +51,39 @@ final bookmarksProvider =
 final isBookmarkedProvider = FutureProvider.family<bool, int>((ref, verseId) {
   return ref.watch(bibleRepositoryProvider).isBookmarked(verseId);
 });
+
+// ── Highlights ─────────────────────────────────────────────────────────────────
+
+final highlightsDaoProvider = Provider<HighlightsDao>((ref) {
+  return ref.watch(appDatabaseProvider).highlightsDao;
+});
+
+final verseHighlightProvider =
+    FutureProvider.family<int?, int>((ref, verseId) async {
+  final dao = ref.watch(highlightsDaoProvider);
+  final result = await dao.getHighlight(verseId);
+  return result?.highlight.colorIndex;
+});
+
+final highlightsWithDetailsProvider =
+    StreamProvider<List<HighlightWithDetails>>((ref) {
+  final dao = ref.watch(highlightsDaoProvider);
+  final repo = ref.watch(bibleRepositoryProvider);
+
+  return dao.watchHighlights().asyncMap((items) async {
+    final result = <HighlightWithDetails>[];
+    for (final h in items) {
+      final book = await repo.getBook(h.verse.bookId);
+      final chapter = await repo.getChapter(h.verse.chapterId);
+      if (book != null && chapter != null) {
+        result.add(HighlightWithDetails(
+          highlight: h.highlight,
+          verse: h.verse,
+          book: book,
+          chapter: chapter,
+        ));
+      }
+    }
+    return result;
+  });
+});
