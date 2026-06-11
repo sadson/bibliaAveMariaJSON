@@ -98,22 +98,19 @@ console.log(`✅ IDs salvos: ${idsPath}`);
 
 // ── Copy ONNX model and vocab to Flutter assets ───────────────────────────────
 
-// The model is cached by @xenova/transformers in ~/.cache/huggingface/hub
-// We copy the relevant files to Flutter assets
+// The model is cached by @xenova/transformers — check local node_modules cache first,
+// then fall back to ~/.cache/huggingface/hub
+const { readdirSync, readFileSync } = await import('fs');
 
-const cacheBase = resolve(
-  process.env.HOME || '.',
-  '.cache/huggingface/hub/models--Xenova--all-MiniLM-L6-v2/snapshots'
-);
+const localCache = resolve(__dirname, 'node_modules/@xenova/transformers/.cache/Xenova/all-MiniLM-L6-v2');
+const hfCacheBase = resolve(process.env.HOME || '.', '.cache/huggingface/hub/models--Xenova--all-MiniLM-L6-v2/snapshots');
 
-// Find the snapshot directory
-const { readdirSync } = await import('fs');
 let snapshotDir = null;
-if (existsSync(cacheBase)) {
-  const snapshots = readdirSync(cacheBase);
-  if (snapshots.length > 0) {
-    snapshotDir = resolve(cacheBase, snapshots[0]);
-  }
+if (existsSync(localCache)) {
+  snapshotDir = localCache;
+} else if (existsSync(hfCacheBase)) {
+  const snapshots = readdirSync(hfCacheBase);
+  if (snapshots.length > 0) snapshotDir = resolve(hfCacheBase, snapshots[0]);
 }
 
 if (snapshotDir) {
@@ -126,15 +123,14 @@ if (snapshotDir) {
   }
 
   // Copy vocabulary
-  const vocabSrc = resolve(snapshotDir, 'tokenizer.json');
   const vocabTxtSrc = resolve(snapshotDir, 'vocab.txt');
+  const tokenizerSrc = resolve(snapshotDir, 'tokenizer.json');
   const vocabDst = resolve(MODEL_DIR, 'tokenizer_vocab.txt');
   if (existsSync(vocabTxtSrc)) {
     copyFileSync(vocabTxtSrc, vocabDst);
     console.log(`✅ Vocabulário copiado: ${vocabDst}`);
-  } else if (existsSync(vocabSrc)) {
-    // Extract vocab from tokenizer.json
-    const tokenizerData = JSON.parse(readFileSync(vocabSrc, 'utf-8'));
+  } else if (existsSync(tokenizerSrc)) {
+    const tokenizerData = JSON.parse(readFileSync(tokenizerSrc, 'utf-8'));
     const vocab = tokenizerData.model?.vocab || {};
     const sorted = Object.entries(vocab)
       .sort((a, b) => a[1] - b[1])
